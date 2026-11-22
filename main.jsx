@@ -52,6 +52,16 @@ const accountKidId =
   account.profile_id === 'dani' || account.profile_id === 'daniela'
     ? 'daniela'
     : account.profile_id === 'alan'
+      ? 'alan'
+      : null;
+
+const effectiveKidId = isParent ? state.activeKid : accountKidId;
+
+const kid = state.kids.find(k => k.id === effectiveKidId);
+const accountKidId =
+  account.profile_id === 'dani' || account.profile_id === 'daniela'
+    ? 'daniela'
+    : account.profile_id === 'alan'
     ? 'alan'
     : null;
 
