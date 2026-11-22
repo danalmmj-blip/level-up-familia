@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Home, Swords, Trophy, Gift, Shield, Flame, Star, Check,
-  Clock, Plus, Settings, Sparkles, ChevronRight, Coins, X, Crown
+  Clock, Plus, Sparkles, ChevronRight, Coins, X
 } from 'lucide-react';
 import './styles.css';
 import { supabase } from './supabase.js';
@@ -37,8 +36,16 @@ const STORAGE='bohorquez_levelup_realstarter_v1';
 function loadState(){
   try {
     const saved=JSON.parse(localStorage.getItem(STORAGE));
-    if(saved) return saved;
+    if(saved) return {
+      ...saved,
+      kids:saved.kids||initialKids,
+      tasks:saved.tasks||initialTasks,
+      rewards:saved.rewards||initialRewards,
+      submissions:saved.submissions||[],
+      history:saved.history||[]
+    };
   } catch {}
+
   return {
     kids:initialKids,
     tasks:initialTasks,
@@ -48,6 +55,23 @@ function loadState(){
     activeKid:'daniela',
     parentPin:'1234'
   };
+}
+
+function dateKey(date=new Date()){
+  return date.toLocaleDateString('en-CA');
+}
+
+function weekKey(date=new Date()){
+  const d=new Date(date);
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate()+4-(d.getDay()||7));
+  const yearStart=new Date(d.getFullYear(),0,1);
+  const week=Math.ceil((((d-yearStart)/86400000)+1)/7);
+  return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+}
+
+function periodKey(task){
+  return task.frequency==='Semanal' ? weekKey() : dateKey();
 }
 
 function App(){
@@ -225,7 +249,6 @@ function FamilyApp({account,onLogout}){
 
   const isParent=account.role==='parent';
 
-  // Identificación robusta del niño según el perfil de Supabase
   const profileId=String(account.profile_id||'').toLowerCase().trim();
   const displayName=String(account.display_name||'').toLowerCase().trim();
 
@@ -257,7 +280,12 @@ function FamilyApp({account,onLogout}){
 
   const pending=state.submissions.filter(s=>s.status==='pending');
   const mySubmissions=state.submissions.filter(s=>s.kidId===kid.id);
-  const doneToday=mySubmissions.filter(s=>s.status==='approved').length;
+
+  const doneToday=mySubmissions.filter(s=>
+    s.type!=='reward' &&
+    s.status==='approved' &&
+    s.period===dateKey()
+  ).length;
 
   const flash=(msg)=>{
     setToast(msg);
@@ -265,21 +293,37 @@ function FamilyApp({account,onLogout}){
   };
 
   const submitTask=(task)=>{
-    if(mySubmissions.some(s=>s.taskId===task.id&&s.status==='pending')){
-      return flash('Esta misión ya está pendiente ✨');
-    }
+    const currentPeriod=periodKey(task);
+
+    const existing=mySubmissions.find(s=>
+      s.taskId===task.id &&
+      s.period===currentPeriod &&
+      s.status==='pending'
+    );
+
+    if(existing) return flash('Esta misión ya está pendiente ✨');
+
+    const alreadyApproved=mySubmissions.find(s=>
+      s.taskId===task.id &&
+      s.period===currentPeriod &&
+      s.status==='approved'
+    );
+
+    if(alreadyApproved) return flash('Esta misión ya está completada en este periodo 🎉');
 
     const next={
       ...state,
       submissions:[
         {
           id:Date.now(),
+          type:'task',
           kidId:kid.id,
           kidName:kid.name,
           taskId:task.id,
           taskTitle:task.title,
-          points:task.points,
+          points:Number(task.points),
           status:'pending',
+          period:currentPeriod,
           createdAt:new Date().toISOString()
         },
         ...state.submissions
@@ -291,20 +335,28 @@ function FamilyApp({account,onLogout}){
   };
 
   const approve=(sub)=>{
+    const isReward=sub.type==='reward';
+
     const next={
       ...state,
-      kids:state.kids.map(k=>
-        k.id===sub.kidId
-          ? {...k,points:k.points+sub.points,xp:k.xp+sub.points}
-          : k
-      ),
+      kids:state.kids.map(k=>{
+        if(k.id!==sub.kidId) return k;
+
+        if(isReward){
+          return {...k,points:Math.max(0,k.points-sub.points)};
+        }
+
+        return {...k,points:k.points+sub.points,xp:k.xp+sub.points};
+      }),
       submissions:state.submissions.map(s=>
-        s.id===sub.id?{...s,status:'approved'}:s
+        s.id===sub.id?{...s,status:'approved',approvedAt:new Date().toISOString()}:s
       ),
       history:[
         {
           id:Date.now(),
-          text:`${sub.kidName} ganó ${sub.points} puntos · ${sub.taskTitle}`,
+          text:isReward
+            ? `${sub.kidName} recibió la recompensa: ${sub.taskTitle} (${sub.points} puntos)`
+            : `${sub.kidName} ganó ${sub.points} puntos · ${sub.taskTitle}`,
           date:new Date().toISOString()
         },
         ...state.history
@@ -312,26 +364,26 @@ function FamilyApp({account,onLogout}){
     };
 
     save(next);
-    flash('¡Misión aprobada!');
+    flash(isReward?'¡Recompensa aprobada!':'¡Misión aprobada!');
   };
 
   const reject=(sub)=>{
     save({
       ...state,
       submissions:state.submissions.map(s=>
-        s.id===sub.id?{...s,status:'rejected'}:s
+        s.id===sub.id?{...s,status:'rejected',rejectedAt:new Date().toISOString()}:s
       ),
       history:[
         {
           id:Date.now(),
-          text:`Misión rechazada · ${sub.kidName} · ${sub.taskTitle}`,
+          text:`Solicitud rechazada · ${sub.kidName} · ${sub.taskTitle}`,
           date:new Date().toISOString()
         },
         ...state.history
       ]
     });
 
-    flash('Misión rechazada');
+    flash('Solicitud rechazada');
   };
 
   const redeem=(reward)=>{
@@ -339,25 +391,35 @@ function FamilyApp({account,onLogout}){
       return flash('Aún te faltan puntos 💪');
     }
 
+    const pendingReward=state.submissions.some(s=>
+      s.type==='reward' &&
+      s.kidId===kid.id &&
+      s.rewardId===reward.id &&
+      s.status==='pending'
+    );
+
+    if(pendingReward) return flash('Este premio ya está pendiente de aprobación ✨');
+
     const next={
       ...state,
-      kids:state.kids.map(k=>
-        k.id===kid.id
-          ? {...k,points:k.points-reward.cost}
-          : k
-      ),
-      history:[
+      submissions:[
         {
           id:Date.now(),
-          text:`${kid.name} canjeó ${reward.title} (${reward.cost} puntos)`,
-          date:new Date().toISOString()
+          type:'reward',
+          kidId:kid.id,
+          kidName:kid.name,
+          rewardId:reward.id,
+          taskTitle:reward.title,
+          points:Number(reward.cost),
+          status:'pending',
+          createdAt:new Date().toISOString()
         },
-        ...state.history
+        ...state.submissions
       ]
     };
 
     save(next);
-    flash('¡Recompensa solicitada! 🎉');
+    flash('¡Premio solicitado! Espera a tus padres 🎉');
   };
 
   const openParents=()=>{
@@ -448,7 +510,10 @@ function FamilyApp({account,onLogout}){
           </div>
 
           <section className="section-head">
-            <div><div className="eyebrow">COMPETICIÓN FAMILIAR</div><h2>Ranking familiar 🏆</h2></div>
+            <div>
+              <div className="eyebrow">COMPETICIÓN FAMILIAR</div>
+              <h2>Ranking familiar 🏆</h2>
+            </div>
           </section>
 
           <div className="ranking-card">
@@ -498,7 +563,7 @@ function FamilyApp({account,onLogout}){
               <p>{r.detail}</p>
               <div className="reward-bottom">
                 <span className="cost"><Coins size={16}/>{r.cost}</span>
-                <button disabled={kid.points<r.cost} onClick={()=>redeem(r)}>{kid.points>=r.cost?'Canjear':'Te faltan puntos'}</button>
+                <button disabled={kid.points<r.cost} onClick={()=>redeem(r)}>{kid.points>=r.cost?'Solicitar':'Te faltan puntos'}</button>
               </div>
             </div>)}
           </div>
@@ -522,7 +587,12 @@ function FamilyApp({account,onLogout}){
 }
 
 function TaskCard({task,submissions,onSubmit}){
-  const status=submissions.filter(s=>s.taskId===task.id).at(0);
+  const currentPeriod=periodKey(task);
+
+  const status=submissions
+    .filter(s=>s.type!=='reward'&&s.taskId===task.id&&s.period===currentPeriod)
+    .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0];
+
   const label=status?.status==='pending'
     ?'Pendiente de aprobación'
     :status?.status==='approved'
@@ -552,7 +622,7 @@ function TaskCard({task,submissions,onSubmit}){
 
 function ParentsPanel({state,save,flash,approve,reject,pending,onExit}){
   const [view,setView]=useState('pending');
-  const [pin,setPin]=useState(state.parentPin);
+  const [pin,setPin]=useState(state.parentPin||'1234');
   const [newTask,setNewTask]=useState({title:'',points:10,detail:'',icon:'✨',frequency:'Diaria'});
   const [newReward,setNewReward]=useState({title:'',cost:100,detail:'',icon:'🎁'});
 
@@ -605,19 +675,19 @@ function ParentsPanel({state,save,flash,approve,reject,pending,onExit}){
     </div>
 
     {view==='pending'&&<div className="admin-list">
-      <h2>Solicitudes de aprobación</h2>
+      <h2>Solicitudes pendientes</h2>
       {pending.length===0
-        ?<div className="empty-state">✨ No hay misiones pendientes. ¡Todo al día!</div>
+        ?<div className="empty-state">✨ No hay solicitudes pendientes. ¡Todo al día!</div>
         :pending.map(s=><div className="approval-card" key={s.id}>
           <div className="approval-avatar">{state.kids.find(k=>k.id===s.kidId)?.emoji}</div>
           <div className="approval-info">
             <strong>{s.kidName}</strong>
-            <span>{s.taskTitle}</span>
-            <small>Recompensa: +{s.points} puntos</small>
+            <span>{s.type==='reward'?'🎁 Premio solicitado: ':'⚔️ Misión: '}{s.taskTitle}</span>
+            <small>{s.type==='reward'?'Coste: ':'Recompensa: '} {s.points} puntos</small>
           </div>
           <div className="approval-buttons">
-            <button className="approve" onClick={()=>approve(s)}><Check size={16}/></button>
-            <button className="reject" onClick={()=>reject(s)}><X size={16}/></button>
+            <button className="approve" onClick={()=>approve(s)} title="Aprobar"><Check size={16}/></button>
+            <button className="reject" onClick={()=>reject(s)} title="Rechazar"><X size={16}/></button>
           </div>
         </div>)}
     </div>}
@@ -685,7 +755,7 @@ function ParentsPanel({state,save,flash,approve,reject,pending,onExit}){
         <label>PIN parental</label>
         <input type="password" inputMode="numeric" value={pin} onChange={e=>setPin(e.target.value)}/>
         <button className="primary-btn" onClick={()=>{save({...state,parentPin:pin});flash('PIN actualizado')}}>Guardar PIN</button>
-        <p className="warning-note">Esta versión guarda los datos en el dispositivo. La sincronización entre móviles y el PIN seguro en servidor se implementarán en la siguiente fase.</p>
+        <p className="warning-note">Esta versión guarda los datos en este dispositivo. La sincronización entre móviles y el PIN seguro en servidor aún no están implementados.</p>
         <button className="danger-btn" onClick={()=>{if(confirm('¿Borrar todo y volver a los datos iniciales?')){localStorage.removeItem(STORAGE);location.reload()}}}>Reiniciar demo</button>
       </div>
     </div>}
