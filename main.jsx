@@ -46,7 +46,18 @@ function FamilyApp({account,onLogout}){
  const [state,setState]=useState(loadState);
  const [tab,setTab]=useState('home'); const [parentOpen,setParentOpen]=useState(false); const [pin,setPin]=useState(''); const [pinError,setPinError]=useState(false); const [selectedKid,setSelectedKid]=useState('daniela'); const [toast,setToast]=useState('');
  const save=(next)=>{setState(next);localStorage.setItem(STORAGE,JSON.stringify(next));};
- const isParent=account.role==='parent'; const accountKidId=account.profile_id==='dani'?'daniela':account.profile_id==='alan'?'alan':null; const effectiveKidId=isParent?state.activeKid:accountKidId; const kid=state.kids.find(k=>k.id===effectiveKidId)||state.kids[0];
+const isParent = account.role === 'parent';
+
+const accountKidId =
+  account.profile_id === 'dani' || account.profile_id === 'daniela'
+    ? 'daniela'
+    : account.profile_id === 'alan'
+    ? 'alan'
+    : null;
+
+const effectiveKidId = isParent ? state.activeKid : accountKidId;
+
+const kid = state.kids.find(k => k.id === effectiveKidId);
  const pending=state.submissions.filter(s=>s.status==='pending');
  const mySubmissions=state.submissions.filter(s=>s.kidId===kid.id);
  const doneToday=mySubmissions.filter(s=>s.status==='approved').length;
